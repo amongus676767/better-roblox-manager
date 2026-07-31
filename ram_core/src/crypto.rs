@@ -165,6 +165,148 @@ pub fn credential_delete(user_id: u64) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// Passphrase used to encrypt the account store when the user has not set a
+/// master password (i.e. Credential Manager mode).
+///
+/// This is obfuscation, not security, and must not be presented to the user as
+/// protection. It exists because in Credential Manager mode the store file
+/// holds no secrets — every cookie lives in the OS credential store and
+/// `encrypted_cookie` is `None` — but the roster (user IDs, aliases, groups,
+/// sort order) still has to be persisted or it is lost on exit.
+pub const LOCAL_STORE_KEY: &str = "RM-Rust::local-store-v1";
+
+/// The passphrase the store file should actually be encrypted with.
+///
+/// A set master password is used as-is (identical to the previous behaviour);
+/// an empty one falls back to [`LOCAL_STORE_KEY`] instead of the caller
+/// skipping the save entirely.
+pub fn effective_store_password(master_password: &str) -> &str {
+    if master_password.is_empty() {
+        LOCAL_STORE_KEY
+    } else {
+        master_password
+    }
+}
+
+/// Resolve an account's cookie from whichever backend actually holds it.
+///
+/// `prefer_credential_manager` sets the order, but **both** backends are always
+/// tried. Hard-failing on the configured backend is what turns a storage-toggle
+/// without migration — or a cleared Windows credential store — into a permanent
+/// lockout, because the cookie is very often still intact in the other one.
+///
+/// The error returned on total failure is the *preferred* backend's error, so
+/// the message still describes the backend the user actually configured.
+pub fn resolve_cookie(
+    user_id: u64,
+    encrypted_cookie: Option<&str>,
+    password: &str,
+    prefer_credential_manager: bool,
+) -> Result<String, CoreError> {
+    fn from_file(enc: Option<&str>, password: &str) -> Result<String, CoreError> {
+        match enc {
+            Some(e) => decrypt_cookie(e, password),
+            None => Err(CoreError::Crypto(
+                "no encrypted cookie stored for this account".into(),
+            )),
+        }
+    }
+
+    let primary_err = if prefer_credential_manager {
+        match credential_load(user_id) {
+            Ok(c) => return Ok(c),
+            Err(e) => e,
+        }
+    } else {
+        match from_file(encrypted_cookie, password) {
+            Ok(c) => return Ok(c),
+            Err(e) => e,
+        }
+    };
+
+    let fallback = if prefer_credential_manager {
+        from_file(encrypted_cookie, password)
+    } else {
+        credential_load(user_id)
+    };
+
+    match fallback {
+        Ok(cookie) => {
+            tracing::warn!(
+                "Cookie for user {user_id} was missing from the configured storage \
+                 backend but was recovered from the other one — the backends are out \
+                 of sync. Re-toggle the storage setting to migrate them properly."
+            );
+            Ok(cookie)
+        }
+        Err(_) => Err(primary_err),
+    }
+}
+
+/// Move every account's cookie out of the encrypted file field and into the OS
+/// credential store. Returns `(migrated, failures)`.
+///
+/// The file copy is only cleared once the credential-store write has succeeded,
+/// so a partial failure leaves the account still readable rather than orphaned.
+pub fn migrate_to_credential_manager(
+    store: &mut AccountStore,
+    password: &str,
+) -> (usize, Vec<(u64, String)>) {
+    let mut moved = 0;
+    let mut failures = Vec::new();
+
+    for account in &mut store.accounts {
+        // Already present in the keyring — just drop the redundant file copy.
+        if credential_load(account.user_id).is_ok() {
+            account.encrypted_cookie = None;
+            continue;
+        }
+        let Some(enc) = account.encrypted_cookie.clone() else {
+            failures.push((account.user_id, "no stored cookie to migrate".to_string()));
+            continue;
+        };
+        match decrypt_cookie(&enc, password) {
+            Ok(plain) => match credential_store(account.user_id, &plain) {
+                Ok(()) => {
+                    account.encrypted_cookie = None;
+                    moved += 1;
+                }
+                Err(e) => failures.push((account.user_id, e.to_string())),
+            },
+            Err(e) => failures.push((account.user_id, e.to_string())),
+        }
+    }
+    (moved, failures)
+}
+
+/// Inverse of [`migrate_to_credential_manager`]: pull every cookie out of the
+/// OS credential store and re-encrypt it into the store file.
+pub fn migrate_to_file(
+    store: &mut AccountStore,
+    password: &str,
+) -> (usize, Vec<(u64, String)>) {
+    let mut moved = 0;
+    let mut failures = Vec::new();
+
+    for account in &mut store.accounts {
+        if account.encrypted_cookie.is_some() {
+            continue;
+        }
+        match credential_load(account.user_id) {
+            Ok(plain) => match encrypt_cookie(&plain, password) {
+                Ok(enc) => {
+                    account.encrypted_cookie = Some(enc);
+                    let _ = credential_delete(account.user_id);
+                    moved += 1;
+                }
+                Err(e) => failures.push((account.user_id, e.to_string())),
+            },
+            Err(e) => failures.push((account.user_id, e.to_string())),
+        }
+    }
+    (moved, failures)
+}
+
 // ---------------------------------------------------------------------------
 // Cookie encryption helpers (for in-memory Account struct serialization)
 // ---------------------------------------------------------------------------

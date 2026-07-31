@@ -195,7 +195,12 @@ pub struct AppState {
 impl AppState {
     pub fn new(mut config: AppConfig, config_path: PathBuf) -> Self {
         let bridge = BackendBridge::spawn();
-        let needs_unlock = config.accounts_path.is_file();
+        // In Credential Manager mode there is no user password to ask for, so
+        // don't show the unlock prompt — try the local key below instead, and
+        // only fall back to prompting if that fails (which means the file was
+        // written by the file backend before the storage toggle).
+        let store_exists = config.accounts_path.is_file();
+        let needs_unlock = store_exists && !config.use_credential_manager;
 
         // If multi-instance was previously enabled, run the same validation as
         // the UI toggle: kill tray processes, wait, then only acquire the mutex
@@ -254,6 +259,15 @@ impl AppState {
             show_changelog: false,
             tutorial: tutorial::TutorialState::default(),
         };
+
+        // Credential Manager mode never reaches the unlock screen, so the
+        // store has to be loaded here or the roster never appears.
+        if store_exists && state.config.use_credential_manager {
+            state.bridge.send(BackendCommand::LoadStore {
+                path: state.config.accounts_path.clone(),
+                password: ram_core::crypto::LOCAL_STORE_KEY.to_string(),
+            });
+        }
 
         // Check for updates on startup
         state.bridge.send(BackendCommand::CheckForUpdates {
@@ -404,6 +418,15 @@ impl AppState {
                         .push(Toast::success("Account store unlocked"));
                     self.trigger_refresh();
                     self.trigger_revalidation();
+                }
+                BackendEvent::StoreLoadFailed(msg) => {
+                    // Either the wrong password, or a file written by the file
+                    // backend before the user switched to Credential Manager.
+                    // Either way the fix is the same: ask for the password.
+                    self.needs_unlock = true;
+                    self.unlock_password_input.clear();
+                    self.toasts
+                        .push(Toast::error(format!("Could not open account store: {msg}")));
                 }
                 BackendEvent::Killed(count) => {
                     self.toasts
@@ -631,14 +654,24 @@ impl AppState {
         }
     }
 
+    /// The passphrase the store file is encrypted with. Identical to
+    /// `master_password` whenever one is set; falls back to the local key in
+    /// Credential Manager mode, where the user is never prompted for one.
+    fn store_password(&self) -> String {
+        ram_core::crypto::effective_store_password(&self.master_password).to_string()
+    }
+
     fn auto_save(&self) {
-        if !self.master_password.is_empty() {
-            self.bridge.send(BackendCommand::SaveStore {
-                store: self.store.clone(),
-                path: self.config.accounts_path.clone(),
-                password: self.master_password.clone(),
-            });
-        }
+        // Unconditional. Guarding this on a non-empty master password meant
+        // that in Credential Manager mode — where the user is never asked for
+        // one — every single save was silently dropped and the whole account
+        // roster was lost on exit. The cookies live in the OS credential store
+        // in that mode, but the roster still has to be written.
+        self.bridge.send(BackendCommand::SaveStore {
+            store: self.store.clone(),
+            path: self.config.accounts_path.clone(),
+            password: self.store_password(),
+        });
     }
 
     /// Pop the next queued cookie and dispatch an AddAccount for it. When the
@@ -908,10 +941,10 @@ impl eframe::App for AppState {
 
                     if ui.button("Unlock").clicked() || enter_pressed {
                         let pw = self.unlock_password_input.clone();
-                        self.master_password = pw.clone();
+                        self.master_password = pw;
                         self.bridge.send(BackendCommand::LoadStore {
                             path: self.config.accounts_path.clone(),
-                            password: pw,
+                            password: self.store_password(),
                         });
                     }
                 });
@@ -1663,6 +1696,57 @@ impl AppState {
                 Some(settings::SettingsAction::ClearPassword) => {
                     self.master_password.clear();
                     self.toasts.push(Toast::info("Password cleared"));
+                }
+                Some(settings::SettingsAction::SetStorageBackend {
+                    use_credential_manager,
+                }) => {
+                    // The flag is only committed once every cookie has been
+                    // moved. Flipping it first is what produced the
+                    // "no matching entry found in data storage" lockout.
+                    if use_credential_manager == self.config.use_credential_manager {
+                        // nothing to do
+                    } else if use_credential_manager {
+                        let pw = self.master_password.clone();
+                        let (moved, failures) =
+                            ram_core::crypto::migrate_to_credential_manager(&mut self.store, &pw);
+                        if failures.is_empty() {
+                            self.config.use_credential_manager = true;
+                            self.master_password.clear();
+                            self.auto_save();
+                            let _ = self.config.save(&self.config_path);
+                            self.toasts.push(Toast::success(format!(
+                                "Moved {moved} cookie(s) into Windows Credential Manager"
+                            )));
+                        } else {
+                            self.toasts.push(Toast::error(format!(
+                                "Migration aborted: {} account(s) could not be moved. \
+                                 Storage backend unchanged.",
+                                failures.len()
+                            )));
+                        }
+                    } else if self.master_password.is_empty() {
+                        self.toasts.push(Toast::error(
+                            "Set a master password before switching to file storage.",
+                        ));
+                    } else {
+                        let pw = self.master_password.clone();
+                        let (moved, failures) =
+                            ram_core::crypto::migrate_to_file(&mut self.store, &pw);
+                        if failures.is_empty() {
+                            self.config.use_credential_manager = false;
+                            self.auto_save();
+                            let _ = self.config.save(&self.config_path);
+                            self.toasts.push(Toast::success(format!(
+                                "Moved {moved} cookie(s) into the encrypted file"
+                            )));
+                        } else {
+                            self.toasts.push(Toast::error(format!(
+                                "Migration aborted: {} account(s) could not be moved. \
+                                 Storage backend unchanged.",
+                                failures.len()
+                            )));
+                        }
+                    }
                 }
                 None => {}
             }

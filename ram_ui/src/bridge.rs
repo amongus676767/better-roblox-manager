@@ -190,6 +190,10 @@ pub enum BackendEvent {
     StoreSaved,
     /// Store loaded from disk.
     StoreLoaded(AccountStore),
+    /// The store file exists but could not be decrypted with the password given.
+    /// Distinct from [`BackendEvent::Error`] so the UI can fall back to the
+    /// unlock prompt instead of just toasting a failure.
+    StoreLoadFailed(String),
     /// All Roblox instances killed (count).
     Killed(usize),
     /// Progress update during a bulk launch (launched_so_far, total).
@@ -508,14 +512,12 @@ async fn handle_command(
             kill_background,
             privacy_mode,
         } => {
-            let cookie = if use_credential_manager {
-                crypto::credential_load(user_id)?
-            } else {
-                let enc = encrypted_cookie.ok_or_else(|| {
-                    CoreError::Crypto("no encrypted cookie stored for this account".into())
-                })?;
-                crypto::decrypt_cookie(&enc, &password)?
-            };
+            let cookie = crypto::resolve_cookie(
+                user_id,
+                encrypted_cookie.as_deref(),
+                &password,
+                use_credential_manager,
+            )?;
             if multi_instance {
                 process::enable_multi_instance()?;
             }
@@ -561,8 +563,13 @@ async fn handle_command(
             Ok(BackendEvent::StoreSaved)
         }
         BackendCommand::LoadStore { path, password } => {
-            let store = crypto::load_encrypted(&path, &password)?;
-            Ok(BackendEvent::StoreLoaded(store))
+            // A failed decrypt is an expected outcome (wrong password, or a
+            // file written by the other storage backend), not a backend error —
+            // report it as its own event so the UI can prompt for a password.
+            match crypto::load_encrypted(&path, &password) {
+                Ok(store) => Ok(BackendEvent::StoreLoaded(store)),
+                Err(e) => Ok(BackendEvent::StoreLoadFailed(e.to_string())),
+            }
         }
         BackendCommand::KillAll => {
             let count = process::kill_all_roblox()?;
@@ -575,14 +582,12 @@ async fn handle_command(
             password,
             use_credential_manager,
         } => {
-            let cookie = if use_credential_manager {
-                crypto::credential_load(first_user_id)?
-            } else {
-                let enc = encrypted_cookie.ok_or_else(|| {
-                    CoreError::Crypto("no encrypted cookie for refresh".into())
-                })?;
-                crypto::decrypt_cookie(&enc, &password)?
-            };
+            let cookie = crypto::resolve_cookie(
+                first_user_id,
+                encrypted_cookie.as_deref(),
+                &password,
+                use_credential_manager,
+            )?;
             let avatars = api::fetch_avatars(client, &cookie, &user_ids).await?;
             let _ = tx.send(BackendEvent::AvatarsUpdated(avatars.clone()));
             // Download actual image bytes (skips failures)
@@ -600,14 +605,12 @@ async fn handle_command(
             password,
             use_credential_manager,
         } => {
-            let cookie = if use_credential_manager {
-                crypto::credential_load(first_user_id)?
-            } else {
-                let enc = encrypted_cookie.ok_or_else(|| {
-                    CoreError::Crypto("no encrypted cookie for refresh".into())
-                })?;
-                crypto::decrypt_cookie(&enc, &password)?
-            };
+            let cookie = crypto::resolve_cookie(
+                first_user_id,
+                encrypted_cookie.as_deref(),
+                &password,
+                use_credential_manager,
+            )?;
             let presences = api::fetch_presences(client, &cookie, &user_ids).await?;
             Ok(BackendEvent::PresencesUpdated(presences))
         }
@@ -643,18 +646,12 @@ async fn handle_command(
                 let first = accounts.first().ok_or_else(|| {
                     CoreError::Process("no accounts to launch".into())
                 })?;
-                let first_cookie = if use_credential_manager {
-                    crypto::credential_load(first.0)?
-                } else {
-                    match &first.1 {
-                        Some(enc) => crypto::decrypt_cookie(enc, &password)?,
-                        None => {
-                            return Err(CoreError::Crypto(
-                                "no encrypted cookie for first account".into(),
-                            ))
-                        }
-                    }
-                };
+                let first_cookie = crypto::resolve_cookie(
+                    first.0,
+                    first.1.as_deref(),
+                    &password,
+                    use_credential_manager,
+                )?;
                 match api::fetch_servers(client, &first_cookie, place_id, None).await {
                     Ok((servers, _)) => {
                         if let Some(server) = servers.into_iter().next() {
@@ -677,16 +674,12 @@ async fn handle_command(
             let mut launched = 0usize;
             let mut failed = 0usize;
             for (i, (user_id, encrypted_cookie)) in accounts.iter().enumerate() {
-                let cookie_result = if use_credential_manager {
-                    crypto::credential_load(*user_id)
-                } else {
-                    match encrypted_cookie {
-                        Some(enc) => crypto::decrypt_cookie(enc, &password),
-                        None => Err(CoreError::Crypto(
-                            "no encrypted cookie stored".into(),
-                        )),
-                    }
-                };
+                let cookie_result = crypto::resolve_cookie(
+                    *user_id,
+                    encrypted_cookie.as_deref(),
+                    &password,
+                    use_credential_manager,
+                );
                 match cookie_result {
                     Ok(cookie) => {
                         match client.generate_auth_ticket(&cookie).await {
@@ -744,14 +737,12 @@ async fn handle_command(
             use_credential_manager,
         } => {
             for (user_id, encrypted_cookie) in &accounts {
-                let cookie_result = if use_credential_manager {
-                    crypto::credential_load(*user_id)
-                } else {
-                    match encrypted_cookie {
-                        Some(enc) => crypto::decrypt_cookie(enc, &password),
-                        None => continue,
-                    }
-                };
+                let cookie_result = crypto::resolve_cookie(
+                    *user_id,
+                    encrypted_cookie.as_deref(),
+                    &password,
+                    use_credential_manager,
+                );
                 let cookie = match cookie_result {
                     Ok(c) => c,
                     Err(_) => continue,
@@ -862,14 +853,12 @@ async fn handle_command(
             profile_dir,
             label,
         } => {
-            let cookie = if use_credential_manager {
-                crypto::credential_load(user_id)?
-            } else {
-                let enc = encrypted_cookie.ok_or_else(|| {
-                    CoreError::Crypto("no encrypted cookie stored for this account".into())
-                })?;
-                crypto::decrypt_cookie(&enc, &password)?
-            };
+            let cookie = crypto::resolve_cookie(
+                user_id,
+                encrypted_cookie.as_deref(),
+                &password,
+                use_credential_manager,
+            )?;
             crate::browser_login::spawn_browse_as(profile_dir, cookie, label)
                 .map_err(CoreError::Process)?;
             Ok(BackendEvent::BrowseAsLaunched)
@@ -882,14 +871,12 @@ async fn handle_command(
             password,
             use_credential_manager,
         } => {
-            let cookie = if use_credential_manager {
-                crypto::credential_load(first_user_id)?
-            } else {
-                let enc = encrypted_cookie.ok_or_else(|| {
-                    CoreError::Crypto("no encrypted cookie for share link resolution".into())
-                })?;
-                crypto::decrypt_cookie(&enc, &password)?
-            };
+            let cookie = crypto::resolve_cookie(
+                first_user_id,
+                encrypted_cookie.as_deref(),
+                &password,
+                use_credential_manager,
+            )?;
             match api::resolve_share_link(client, &cookie, &share_code).await {
                 Ok((place_id, universe_id, link_code, access_code)) => {
                     Ok(BackendEvent::ShareLinkResolved {

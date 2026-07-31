@@ -7,6 +7,10 @@ use ram_core::models::AppConfig;
 #[allow(dead_code)]
 pub enum SettingsAction {
     SaveConfig,
+    /// The user toggled the storage backend. The app layer must migrate the
+    /// cookies *before* flipping `config.use_credential_manager`, so this
+    /// carries the requested value rather than mutating the config here.
+    SetStorageBackend { use_credential_manager: bool },
     ChangePassword { new_password: String },
     ClearPassword,
     EnableMultiInstance,
@@ -46,10 +50,28 @@ pub fn show(
         ui.set_min_width(ui.available_width());
         ui.strong("Storage");
         ui.add_space(4.0);
-        ui.checkbox(
-            &mut config.use_credential_manager,
-            "Use Windows Credential Manager (instead of encrypted file)",
-        );
+        // Bound to a local copy on purpose: flipping the config field directly
+        // is what stranded users' cookies in the backend they just switched
+        // away from. The app layer migrates first and only then commits.
+        let mut wants_cm = config.use_credential_manager;
+        if ui
+            .checkbox(
+                &mut wants_cm,
+                "Use Windows Credential Manager (instead of encrypted file)",
+            )
+            .changed()
+        {
+            action = Some(SettingsAction::SetStorageBackend {
+                use_credential_manager: wants_cm,
+            });
+        }
+        if !config.use_credential_manager && !has_password {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 160, 40),
+                "\u{26a0} Unlock the account store before switching backends, \
+                 otherwise the saved cookies cannot be migrated.",
+            );
+        }
     });
     ui.add_space(6.0);
 

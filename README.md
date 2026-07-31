@@ -22,7 +22,7 @@ A fast, lightweight Roblox account manager built with Rust and [egui](https://gi
 
 ### Prerequisites
 
-- [Rust](https://rustup.rs/) (stable, 1.75+)
+- [Rust](https://rustup.rs/) (stable, 1.85+ — the dependency tree requires edition 2024)
 - Windows 10/11 (required for Win32 APIs)
 
 ### Build
@@ -30,7 +30,7 @@ A fast, lightweight Roblox account manager built with Rust and [egui](https://gi
 ```bash
 # Clone the repository
 git clone https://gitlab.com/centerepic/robloxmanager.git
-cd ram2
+cd robloxmanager
 
 # Build in release mode
 cargo build --release
@@ -47,8 +47,8 @@ The compiled binary will be at `target/release/ram_ui.exe`.
 # Check for errors without building
 cargo check
 
-# Run with debug logging
-RUST_LOG=debug cargo run
+# Run with debug logging (PowerShell)
+$env:RUST_LOG="debug"; cargo run
 ```
 
 ## Usage
