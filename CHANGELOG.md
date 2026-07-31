@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.0.1
+
+### Added
+- **Application icon.** `brm.exe` now carries a proper BRM icon, so Explorer, the taskbar and pinned shortcuts show it instead of a blank default. The same artwork is used for the running window's title bar and taskbar button.
+- Product name, description and version metadata are compiled into the executable and visible under Properties → Details.
+
 ## v2.0.0
 
 Forked from [centerepic/robloxmanager](https://gitlab.com/centerepic/robloxmanager) as **BRM - Better Roblox Manager**. Major version because the account storage layer was repaired and the entire appearance system is new.

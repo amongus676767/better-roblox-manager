@@ -179,9 +179,14 @@ fn main() {
     };
 
     // Decode the embedded logo for the window icon.
+    //
+    // Separate from the icon compiled into the exe by `build.rs`: that one is
+    // what Explorer and a pinned shortcut display, this one is what the running
+    // window and its taskbar button use. Both are generated from the same
+    // artwork so they match.
     let icon = {
-        let png = include_bytes!("../../assets/Logo.png");
-        let img = image::load_from_memory(png).expect("failed to decode Logo.png");
+        let png = include_bytes!("../../assets/icon.png");
+        let img = image::load_from_memory(png).expect("failed to decode icon.png");
         let rgba = img.to_rgba8();
         let (w, h) = rgba.dimensions();
         eframe::egui::IconData {
