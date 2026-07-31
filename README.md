@@ -1,10 +1,6 @@
-# RM - Roblox Manager
+# Better RM - Better Roblox Manager by Amongus676767
 
-> **This repository has moved.**
-> Development continues at gitlab.com/centerepic/robloxmanager.
-> The GitHub repo is archived and will no longer receive updates.
-
-A fast, lightweight Roblox account manager built with Rust and [egui](https://github.com/emilk/egui). Manage multiple Roblox accounts, launch games, and switch between sessions with ease.
+A fast, lightweight Roblox account manager built with Rust and [egui](https://github.com/emilk/egui). Manage multiple Roblox accounts, launch games, and switch between sessions with ease. Rebranded and updated since currently, the original RM is nonfunctional.
 
 > **⚠️ Disclaimer:** This tool interacts with Roblox authentication cookies and game-launching internals. Use at your own risk. The multi-instance feature bypasses Roblox's singleton mutex, which may conflict with Hyperion anti-cheat and could carry ban risk. This project is not affiliated with or endorsed by Roblox Corporation.
 
@@ -17,6 +13,7 @@ A fast, lightweight Roblox account manager built with Rust and [egui](https://gi
 - **Privacy Mode** - Clears tracking cookies before each launch
 - **Auto Window Tiling** - Arranges Roblox windows in a grid after launch
 - **Live Presence** - Real-time Online / In Game / In Studio / Offline indicators
+- **Optional themes and background effects to customize the client
 
 ## Building from Source
 
@@ -65,9 +62,7 @@ $env:RUST_LOG="debug"; cargo run
 
 ## Background
 
-RM is the spiritual successor to [ByeBanAsync](https://github.com/centerepic/ByeBanAsync), since just clearing RobloxCookies.dat isn't effective anymore. If you completely avoid the browser, this heavily limits Roblox's ability to link your accounts.
-
-Later updates may be made to reinforce anti-association if needed.
+BRM is a modified fork of RM, which was the spiritual successor to [ByeBanAsync](https://github.com/centerepic/ByeBanAsync), since just clearing RobloxCookies.dat isn't effective anymore. If you completely avoid the browser, this heavily limits Roblox's ability to link your accounts.
 
 ## License
 
