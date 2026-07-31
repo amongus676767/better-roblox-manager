@@ -13,7 +13,7 @@ A fast, lightweight Roblox account manager built with Rust and [egui](https://gi
 - **Privacy Mode** - Clears tracking cookies before each launch
 - **Auto Window Tiling** - Arranges Roblox windows in a grid after launch
 - **Live Presence** - Real-time Online / In Game / In Studio / Offline indicators
-- **Optional themes and background effects to customize the client
+- **Client Customization** - Optional themes and background effects to customize the client
 
 ## Building from Source
 
