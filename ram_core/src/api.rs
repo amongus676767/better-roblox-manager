@@ -310,40 +310,55 @@ pub async fn resolve_share_link(
 }
 
 // ---------------------------------------------------------------------------
-// GitLab update check
+// Update check
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-struct ReleaseLinks {
-    #[serde(rename = "self")]
-    self_url: String,
-}
-
-#[derive(Deserialize)]
-struct GitLabRelease {
+struct GitHubRelease {
     tag_name: String,
-    _links: ReleaseLinks,
+    html_url: String,
 }
 
-/// Check for a newer release on GitLab. Returns `Some((version, url))` if an
-/// update is available, `None` if already on the latest.
+/// Parse a `1.2.3` style tag into comparable parts. Non-numeric or missing
+/// components become 0, which is fine for ordering release tags.
+fn version_parts(v: &str) -> (u32, u32, u32) {
+    let mut it = v
+        .trim_start_matches('v')
+        .split(['.', '-', '+'])
+        .map(|p| p.parse::<u32>().unwrap_or(0));
+    (
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+    )
+}
+
+/// Check for a newer release of *this* fork. Returns `Some((version, url))`
+/// only when the remote tag is genuinely newer.
+///
+/// Two things matter here. The endpoint must point at this repository rather
+/// than upstream — a fork on its own version line would otherwise see
+/// upstream's tag, find it different, and advertise a *downgrade* to a
+/// different application as an update. And the comparison must be an ordering,
+/// not `!=`, for the same reason: any mismatch used to count as "newer".
 pub async fn check_for_updates(current_version: &str) -> Result<Option<(String, String)>, CoreError> {
     let client = reqwest::Client::builder()
-        .user_agent("RM-update-check")
+        .user_agent("BRM-update-check")
         .build()?;
 
-    let release: GitLabRelease = client
-        .get("https://gitlab.com/api/v4/projects/centerepic%2Frobloxmanager/releases/permalink/latest")
+    let release: GitHubRelease = client
+        .get("https://api.github.com/repos/amongus676767/Better-Roblox-Manager/releases/latest")
         .send()
         .await?
+        .error_for_status()?
         .json()
         .await?;
 
-    let remote = release.tag_name.trim_start_matches('v');
-    let local = current_version.trim_start_matches('v');
-
-    if remote != local {
-        Ok(Some((remote.to_string(), release._links.self_url)))
+    if version_parts(&release.tag_name) > version_parts(current_version) {
+        Ok(Some((
+            release.tag_name.trim_start_matches('v').to_string(),
+            release.html_url,
+        )))
     } else {
         Ok(None)
     }

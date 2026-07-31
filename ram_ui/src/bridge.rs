@@ -120,7 +120,13 @@ pub enum BackendCommand {
     /// Arrange all Roblox windows in a tiled grid.
     ArrangeWindows,
     /// Check GitLab for a newer release.
-    CheckForUpdates { current_version: String },
+    CheckForUpdates {
+        current_version: String,
+        /// True when the user pressed the button. Automatic startup checks
+        /// stay silent on "no update" and on failure; a manual check must
+        /// always report something, or the button looks broken.
+        manual: bool,
+    },
     /// Resolve a place ID to its name (for private server auto-check).
     ResolvePlace {
         place_id: u64,
@@ -192,6 +198,10 @@ pub enum BackendEvent {
     StoreSaved,
     /// Store loaded from disk.
     StoreLoaded(AccountStore),
+    /// The update check completed and there was nothing newer.
+    NoUpdateAvailable { manual: bool },
+    /// The update check could not be completed.
+    UpdateCheckFailed { message: String, manual: bool },
     /// A corner-overlay image was downloaded.
     OverlayImageReady {
         bytes: Vec<u8>,
@@ -834,18 +844,20 @@ async fn handle_command(
             process::arrange_roblox_windows();
             Ok(BackendEvent::WindowsArranged)
         }
-        BackendCommand::CheckForUpdates { current_version } => {
-            match api::check_for_updates(&current_version).await {
-                Ok(Some((version, url))) => {
-                    Ok(BackendEvent::UpdateAvailable { version, url })
-                }
-                Ok(None) => Ok(BackendEvent::StoreSaved), // no-op event
-                Err(e) => {
-                    info!("Update check failed (non-fatal): {e}");
-                    Ok(BackendEvent::StoreSaved) // silently ignore
-                }
+        BackendCommand::CheckForUpdates {
+            current_version,
+            manual,
+        } => match api::check_for_updates(&current_version).await {
+            Ok(Some((version, url))) => Ok(BackendEvent::UpdateAvailable { version, url }),
+            Ok(None) => Ok(BackendEvent::NoUpdateAvailable { manual }),
+            Err(e) => {
+                info!("Update check failed (non-fatal): {e}");
+                Ok(BackendEvent::UpdateCheckFailed {
+                    message: e.to_string(),
+                    manual,
+                })
             }
-        }
+        },
         BackendCommand::ResolvePlace { place_id, universe_id, index } => {
             // Both the game name and icon endpoints work without auth when we
             // have a universe_id. If we don't, we can't resolve without auth.

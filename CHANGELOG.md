@@ -1,5 +1,29 @@
 # Changelog
 
+## v2.0.0
+
+Forked from [centerepic/robloxmanager](https://gitlab.com/centerepic/robloxmanager) as **BRM - Better Roblox Manager**. Major version because the account storage layer was repaired and the entire appearance system is new.
+
+### Fixed
+- **Accounts vanishing on exit.** In Windows Credential Manager mode the app never prompted for a master password, and the save path was gated on one being set - so every save was silently dropped and the whole account list was lost when you closed the app.
+- **"Keyring error: no matching entry found in data storage".** Switching the storage backend moved nothing, stranding cookies in the backend you had just switched away from. The toggle now migrates your cookies first and only commits the change if that succeeds.
+- **Permanent lockouts.** Cookie reads were all-or-nothing against one backend. They now fall back to the other, which repairs already-broken installs without re-adding a single account.
+- **Interrupted backend switches.** The config write was synchronous while the store re-encryption was not, so a switch could half-complete. Unlocking now finishes the job instead of prompting forever, and the error no longer blames a wrong password for an internal key you never chose.
+- Update checks point at this fork and compare version order, so a fork on its own version line no longer advertises a downgrade as an update.
+
+### Added
+- **Custom backgrounds.** PNG, JPG, GIF and WebP, including animated GIF and animated WebP. Opacity, three fit modes, a dim scrim, and a panel-opacity control.
+- **Themes.** Six palettes covering both the widgets and the backdrop, switchable without a restart.
+- **Animated effects.** Nebula, starfield, rain and a cursor glow, each independently toggleable with a shared intensity slider. All off by default.
+- **Rain ambience,** synthesised in real time rather than shipped as an audio file, with an option to supply your own sound.
+- **Corner image,** pulled from nekos.best or nekos.life with artist attribution shown where the API provides it.
+- **CJK font support,** so Japanese, Chinese and Korean text renders instead of empty boxes - in artist credits and Roblox display names alike.
+
+### Changed
+- Renamed to Better Roblox Manager; the binary is now `brm.exe`.
+- Image textures upload with mipmaps and resample with Lanczos3, which noticeably sharpens wallpapers.
+- Minimum supported Rust version corrected to 1.85 (the dependency tree needs edition 2024).
+
 ## v1.4.5
 
 ### Fixed

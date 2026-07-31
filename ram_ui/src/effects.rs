@@ -313,7 +313,7 @@ fn paint_cursor(
         let moved = state
             .trail
             .back()
-            .map_or(true, |last| last.distance(pos) > 2.0);
+            .is_none_or(|last| last.distance(pos) > 2.0);
         if moved {
             state.trail.push_back(pos);
         }

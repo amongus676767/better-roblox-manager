@@ -24,11 +24,12 @@ fn slugify(name: &str) -> String {
         if c.is_ascii_alphanumeric() {
             out.push(c.to_ascii_lowercase());
             last_hyphen = false;
-        } else if c.is_whitespace() || c == '-' || c == '_' {
-            if !last_hyphen && !out.is_empty() {
-                out.push('-');
-                last_hyphen = true;
-            }
+        } else if (c.is_whitespace() || c == '-' || c == '_')
+            && !last_hyphen
+            && !out.is_empty()
+        {
+            out.push('-');
+            last_hyphen = true;
         }
     }
     while out.ends_with('-') {
@@ -62,12 +63,16 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{stem}-{ms}.json"))
 }
 
+/// Every preset found on disk, paired with its path, plus the paths of files
+/// that failed to parse.
+pub type LoadedPresets = (Vec<(PathBuf, LaunchPreset)>, Vec<PathBuf>);
+
 /// Load every `.json` preset file in `presets_dir(data_dir)`. Files that fail
 /// to parse are skipped (with their path returned) rather than aborting the
 /// whole load — one bad file shouldn't hide every other preset.
 ///
 /// Returned tuple: `(presets_with_path, skipped_paths)`.
-pub fn load_all(data_dir: &Path) -> Result<(Vec<(PathBuf, LaunchPreset)>, Vec<PathBuf>), CoreError> {
+pub fn load_all(data_dir: &Path) -> Result<LoadedPresets, CoreError> {
     let dir = presets_dir(data_dir);
     if !dir.exists() {
         return Ok((Vec::new(), Vec::new()));
@@ -89,7 +94,7 @@ pub fn load_all(data_dir: &Path) -> Result<(Vec<(PathBuf, LaunchPreset)>, Vec<Pa
         }
     }
     // Sort by preset name (case-insensitive) so the UI order is stable.
-    presets.sort_by(|a, b| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()));
+    presets.sort_by_key(|a| a.1.name.to_lowercase());
     Ok((presets, skipped))
 }
 

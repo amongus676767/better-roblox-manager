@@ -39,6 +39,7 @@ enum Tab {
     PrivateServers,
     Presets,
     Settings,
+    WhatsNew,
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +109,7 @@ struct AddAccountDialog {
 /// tokens are dropped and surrounding quotes/whitespace are trimmed.
 fn parse_bulk_cookies(input: &str) -> Vec<String> {
     input
-        .split(|c: char| matches!(c, '\n' | '\r' | ',' | ';' | '\t'))
+        .split(['\n', '\r', ',', ';', '\t'])
         .map(|s| s.trim().trim_matches('"').trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
@@ -186,6 +187,9 @@ pub struct AppState {
 
     /// Available update info: (version, release_url).
     update_available: Option<(String, String)>,
+    /// True while a manual update check is in flight, so the button can show
+    /// progress instead of appearing inert.
+    checking_for_update: bool,
     /// Show the "What's New" changelog window.
     show_changelog: bool,
 
@@ -275,6 +279,7 @@ impl AppState {
             unlock_password_input: String::new(),
             confirm_remove: None,
             update_available: None,
+            checking_for_update: false,
             show_changelog: false,
             tutorial: tutorial::TutorialState::default(),
             effects: effects::EffectState::default(),
@@ -302,6 +307,7 @@ impl AppState {
         // Check for updates on startup
         state.bridge.send(BackendCommand::CheckForUpdates {
             current_version: env!("CARGO_PKG_VERSION").to_string(),
+            manual: false,
         });
 
         // Resolve game icons for saved private servers
@@ -622,7 +628,26 @@ impl AppState {
                     }
                 }
                 BackendEvent::UpdateAvailable { version, url } => {
+                    self.checking_for_update = false;
+                    self.toasts
+                        .push(Toast::success(format!("Version {version} is available")));
                     self.update_available = Some((version, url));
+                }
+                BackendEvent::NoUpdateAvailable { manual } => {
+                    self.checking_for_update = false;
+                    if manual {
+                        self.toasts.push(Toast::info(format!(
+                            "You're on the latest version (v{})",
+                            env!("CARGO_PKG_VERSION")
+                        )));
+                    }
+                }
+                BackendEvent::UpdateCheckFailed { message, manual } => {
+                    self.checking_for_update = false;
+                    if manual {
+                        self.toasts
+                            .push(Toast::error(format!("Update check failed: {message}")));
+                    }
                 }
                 BackendEvent::PlaceResolved { index, place_name, place_id, icon_bytes } => {
                     if let Some(server) = self.config.private_servers.get_mut(index) {
@@ -1058,7 +1083,7 @@ impl eframe::App for AppState {
             let now = std::time::Instant::now();
             let due = self
                 .last_tray_kill
-                .map_or(true, |t| now.duration_since(t) >= std::time::Duration::from_secs(10));
+                .is_none_or(|t| now.duration_since(t) >= std::time::Duration::from_secs(10));
             if due {
                 self.last_tray_kill = Some(now);
                 ram_core::process::kill_tray_roblox();
@@ -1121,6 +1146,7 @@ impl eframe::App for AppState {
                 ui.selectable_value(&mut self.active_tab, Tab::PrivateServers, "🔒 Private Servers");
                 ui.selectable_value(&mut self.active_tab, Tab::Presets, "⭐ Presets");
                 ui.selectable_value(&mut self.active_tab, Tab::Settings, "⚙ Settings");
+                ui.selectable_value(&mut self.active_tab, Tab::WhatsNew, "✨ What's New");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if let Some((ref version, ref url)) = self.update_available {
                         let text = format!("⬆ Update v{version} available");
@@ -1167,6 +1193,7 @@ impl eframe::App for AppState {
             Tab::PrivateServers => self.show_private_servers_tab(ctx),
             Tab::Presets => self.show_presets_tab(ctx),
             Tab::Settings => self.show_settings_tab(ctx),
+            Tab::WhatsNew => self.show_whats_new_tab(ctx),
         }
 
         // ---- Floating add-account dialog ----
@@ -2811,6 +2838,143 @@ impl AppState {
         }
     }
 
+    /// The whole changelog, baked into the binary at compile time.
+    const CHANGELOG: &'static str = include_str!("../../CHANGELOG.md");
+
+    /// Split the changelog into this fork's history and the original
+    /// project's.
+    ///
+    /// The boundary is the first `1.x` heading: everything from v2.0.0 onward
+    /// is BRM, and v1.4.5 and earlier belong to centerepic/robloxmanager.
+    /// Keying off the major version rather than a hardcoded tag means future
+    /// 2.x releases land on the right side of the line automatically.
+    fn changelog_split() -> (&'static str, &'static str) {
+        // Skip the file's own `# Changelog` title — the tab already has a heading.
+        let body = match Self::CHANGELOG.find("## v") {
+            Some(i) => &Self::CHANGELOG[i..],
+            None => Self::CHANGELOG,
+        };
+        match body.find("\n## v1.") {
+            Some(i) => (&body[..i], &body[i..]),
+            None => (body, ""),
+        }
+    }
+
+    /// Slice out one version's section, or fall back to the whole file when
+    /// that version has no entry.
+    fn changelog_section(version: &str) -> &'static str {
+        let heading = format!("## v{version}");
+        match Self::CHANGELOG.find(&heading) {
+            Some(start) => {
+                let rest = &Self::CHANGELOG[start..];
+                let end = rest[heading.len()..]
+                    .find("\n## v")
+                    .map(|i| i + heading.len())
+                    .unwrap_or(rest.len());
+                &rest[..end]
+            }
+            None => Self::CHANGELOG,
+        }
+    }
+
+    /// Markdown-lite renderer shared by the update popup and the What's New
+    /// tab, so the two can't drift into formatting the same file differently.
+    fn render_changelog(ui: &mut egui::Ui, text: &str) {
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                ui.add_space(2.0);
+            } else if let Some(h) = trimmed.strip_prefix("### ") {
+                ui.add_space(4.0);
+                ui.strong(h);
+            } else if let Some(h) = trimmed.strip_prefix("## ") {
+                ui.add_space(6.0);
+                ui.heading(h);
+            } else if let Some(h) = trimmed.strip_prefix("# ") {
+                ui.heading(h);
+            } else if let Some(item) = trimmed.strip_prefix("- ") {
+                Self::render_md_line(ui, &format!("  • {item}"));
+            } else {
+                Self::render_md_line(ui, trimmed);
+            }
+        }
+    }
+
+    fn show_whats_new_tab(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("What's New");
+            ui.label(
+                egui::RichText::new(format!(
+                    "Better Roblox Manager v{} — a fork of centerepic/robloxmanager.",
+                    env!("CARGO_PKG_VERSION")
+                ))
+                .small()
+                .color(ui.visuals().weak_text_color()),
+            );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if self.checking_for_update {
+                    ui.spinner();
+                    ui.label("Checking for updates...");
+                } else if ui.button("\u{1f504} Check for updates").clicked() {
+                    self.checking_for_update = true;
+                    self.bridge.send(BackendCommand::CheckForUpdates {
+                        current_version: env!("CARGO_PKG_VERSION").to_string(),
+                        manual: true,
+                    });
+                }
+                if let Some((version, url)) = self.update_available.clone() {
+                    // Same mechanism as the top-bar update link — egui hands
+                    // the URL to the platform, so no extra dependency.
+                    if ui.button(format!("\u{2b07} Get v{version}")).clicked() {
+                        ui.output_mut(|o| {
+                            o.open_url = Some(egui::output::OpenUrl::new_tab(&url))
+                        });
+                    }
+                }
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            let (fork_history, upstream_history) = Self::changelog_split();
+
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    // This project's own history first.
+                    Self::render_changelog(ui, fork_history);
+
+                    if !upstream_history.is_empty() {
+                        ui.add_space(14.0);
+                        ui.separator();
+                        ui.add_space(6.0);
+
+                        ui.heading("Before the fork");
+                        ui.label(
+                            egui::RichText::new(
+                                "Everything below is the original project's history, kept \
+                                 for reference. BRM forked from centerepic/robloxmanager at \
+                                 v1.4.5; every release from v2.0.0 onward is this project.",
+                            )
+                            .small()
+                            .color(ui.visuals().weak_text_color()),
+                        );
+                        ui.add_space(6.0);
+
+                        // Collapsed by default: it's context, not the point of
+                        // the page, and it's far longer than the fork's own log.
+                        egui::CollapsingHeader::new("Original project changelog (v1.4.5 and earlier)")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                Self::render_changelog(ui, upstream_history);
+                            });
+                    }
+                });
+        });
+    }
+
     fn show_changelog_window(&mut self, ctx: &egui::Context) {
         if !self.show_changelog {
             return;
@@ -2825,40 +2989,21 @@ impl AppState {
                 egui::ScrollArea::vertical()
                     .max_height(400.0)
                     .show(ui, |ui| {
-                        let changelog = include_str!("../../CHANGELOG.md");
-                        // Show only the section for the current version
-                        let current = format!("## v{}", env!("CARGO_PKG_VERSION"));
-                        let section = if let Some(start) = changelog.find(&current) {
-                            let rest = &changelog[start..];
-                            let end = rest[current.len()..]
-                                .find("\n## v")
-                                .map(|i| i + current.len())
-                                .unwrap_or(rest.len());
-                            &rest[..end]
-                        } else {
-                            changelog
-                        };
-                        // Render markdown-lite
-                        for line in section.lines() {
-                            let trimmed = line.trim();
-                            if trimmed.is_empty() {
-                                ui.add_space(2.0);
-                            } else if let Some(h) = trimmed.strip_prefix("### ") {
-                                ui.add_space(4.0);
-                                ui.strong(h);
-                            } else if let Some(h) = trimmed.strip_prefix("## ") {
-                                ui.heading(h);
-                            } else if let Some(item) = trimmed.strip_prefix("- ") {
-                                Self::render_md_line(ui, &format!("  • {item}"));
-                            } else {
-                                Self::render_md_line(ui, trimmed);
-                            }
-                        }
+                        Self::render_changelog(
+                            ui,
+                            Self::changelog_section(env!("CARGO_PKG_VERSION")),
+                        );
                     });
                 ui.add_space(8.0);
-                if ui.button("Close").clicked() {
-                    self.show_changelog = false;
-                }
+                ui.horizontal(|ui| {
+                    if ui.button("Close").clicked() {
+                        self.show_changelog = false;
+                    }
+                    if ui.button("See full history").clicked() {
+                        self.active_tab = Tab::WhatsNew;
+                        self.show_changelog = false;
+                    }
+                });
             });
         if !open {
             self.show_changelog = false;

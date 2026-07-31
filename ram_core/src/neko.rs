@@ -62,7 +62,7 @@ pub async fn fetch(pick: u32) -> Result<NekoImage, CoreError> {
         .timeout(std::time::Duration::from_secs(20))
         .build()?;
 
-    if pick % 2 == 0 {
+    if pick.is_multiple_of(2) {
         fetch_nekos_best(&client).await
     } else {
         fetch_nekos_life(&client).await
