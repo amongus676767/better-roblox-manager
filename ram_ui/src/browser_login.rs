@@ -27,11 +27,11 @@ use tracing::{info, warn};
 use wry::{WebContext, WebViewBuilder};
 
 /// CLI flag that switches `main()` into child webview mode.
-/// Invoked as: `ram_ui.exe --browser-login <profile_dir> <outfile>`.
+/// Invoked as: `brm.exe --browser-login <profile_dir> <outfile>`.
 pub const FLAG: &str = "--browser-login";
 
 /// CLI flag for the "Open browser as <account>" child mode.
-/// Invoked as: `ram_ui.exe --browse-as <profile_dir> <cookie_file>`.
+/// Invoked as: `brm.exe --browse-as <profile_dir> <cookie_file>`.
 pub const BROWSE_AS_FLAG: &str = "--browse-as";
 
 const LOGIN_URL: &str = "https://www.roblox.com/login";

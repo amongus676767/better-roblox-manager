@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::bridge::{BackendBridge, BackendCommand, BackendEvent};
+use crate::{audio, background, effects, overlay};
 use crate::components::{
     group_panel, main_panel, presets_panel, private_servers, settings, sidebar, tutorial,
 };
@@ -190,6 +191,24 @@ pub struct AppState {
 
     /// Interactive first-launch tutorial.
     tutorial: tutorial::TutorialState,
+
+    /// Raindrop / cursor-trail state for the animated background.
+    effects: effects::EffectState,
+    /// Cached GPU texture for the user's background image.
+    background: background::BackgroundImage,
+    /// Rain ambience. Opens no audio device until rain sound is switched on.
+    audio: audio::RainAudio,
+    /// Decorative corner image.
+    overlay: overlay::Overlay,
+    /// Theme id currently applied to egui's visuals. Compared against
+    /// `config.theme` each frame so switching themes takes effect immediately
+    /// rather than on restart.
+    applied_theme: String,
+    /// Panel opacity currently baked into egui's visuals, so dragging the
+    /// slider re-applies the theme rather than waiting for a restart.
+    /// `None` = never applied. Not a `NaN` sentinel: `NaN` compares false
+    /// against everything, so the "has it changed" test would never fire.
+    applied_panel_opacity: Option<f32>,
 }
 
 impl AppState {
@@ -258,6 +277,12 @@ impl AppState {
             update_available: None,
             show_changelog: false,
             tutorial: tutorial::TutorialState::default(),
+            effects: effects::EffectState::default(),
+            background: background::BackgroundImage::default(),
+            audio: audio::RainAudio::default(),
+            overlay: overlay::Overlay::default(),
+            applied_theme: String::new(),
+            applied_panel_opacity: None,
         };
 
         // Credential Manager mode never reaches the unlock screen, so the
@@ -267,6 +292,11 @@ impl AppState {
                 path: state.config.accounts_path.clone(),
                 password: ram_core::crypto::LOCAL_STORE_KEY.to_string(),
             });
+        }
+
+        if state.config.overlay_enabled && state.config.overlay_fetch_on_start {
+            state.overlay.loading = true;
+            state.bridge.send(BackendCommand::FetchOverlayImage);
         }
 
         // Check for updates on startup
@@ -301,7 +331,7 @@ impl AppState {
 
     // ---- Event processing ----
 
-    fn process_events(&mut self) {
+    fn process_events(&mut self, ctx: &egui::Context) {
         for event in self.bridge.poll() {
             match event {
                 BackendEvent::AccountValidated {
@@ -416,8 +446,42 @@ impl AppState {
                     self.needs_unlock = false;
                     self.toasts
                         .push(Toast::success("Account store unlocked"));
+
+                    // Being in Credential Manager mode yet needing a real
+                    // password means a previous switch was interrupted before
+                    // the store was re-encrypted. Finish it now rather than
+                    // asking again on every launch.
+                    if self.config.use_credential_manager && !self.master_password.is_empty() {
+                        let pw = self.master_password.clone();
+                        let (moved, failures) =
+                            ram_core::crypto::migrate_to_credential_manager(&mut self.store, &pw);
+                        if failures.is_empty() {
+                            self.master_password.clear();
+                            self.auto_save();
+                            self.toasts.push(Toast::success(format!(
+                                "Finished switching to Windows Credential Manager ({moved} cookie(s) moved)"
+                            )));
+                        } else {
+                            self.toasts.push(Toast::warning(format!(
+                                "{} account(s) could not be moved to Credential Manager; \
+                                 they still work, but the password prompt will remain.",
+                                failures.len()
+                            )));
+                        }
+                    }
+
                     self.trigger_refresh();
                     self.trigger_revalidation();
+                }
+                BackendEvent::OverlayImageReady {
+                    bytes,
+                    artist,
+                    source_site,
+                } => {
+                    self.overlay.set_image(ctx, &bytes, artist, source_site);
+                }
+                BackendEvent::OverlayImageFailed(msg) => {
+                    self.overlay.fail(msg);
                 }
                 BackendEvent::StoreLoadFailed(msg) => {
                     // Either the wrong password, or a file written by the file
@@ -425,8 +489,17 @@ impl AppState {
                     // Either way the fix is the same: ask for the password.
                     self.needs_unlock = true;
                     self.unlock_password_input.clear();
-                    self.toasts
-                        .push(Toast::error(format!("Could not open account store: {msg}")));
+                    if self.config.use_credential_manager {
+                        // Don't say "wrong master password" here — the app just
+                        // tried an internal key the user never chose, and the
+                        // store is intact. Say what actually needs doing.
+                        self.toasts.push(Toast::warning(
+                            "This store still uses your old master password. Enter it once to finish switching to Credential Manager.",
+                        ));
+                    } else {
+                        self.toasts
+                            .push(Toast::error(format!("Could not open account store: {msg}")));
+                    }
                 }
                 BackendEvent::Killed(count) => {
                     self.toasts
@@ -854,8 +927,96 @@ impl AppState {
 // ---------------------------------------------------------------------------
 
 impl eframe::App for AppState {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // Panels are translucent so the animated layer shows through; the
+        // window itself must therefore clear to the theme's deep colour
+        // rather than egui's default grey.
+        let c = crate::theme::by_id(&self.config.theme).space_bottom;
+        [
+            c.r() as f32 / 255.0,
+            c.g() as f32 / 255.0,
+            c.b() as f32 / 255.0,
+            1.0,
+        ]
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_count += 1;
+
+        // Re-apply visuals when the user picks a different theme.
+        let opacity_changed = match self.applied_panel_opacity {
+            Some(applied) => (applied - self.config.panel_opacity).abs() > f32::EPSILON,
+            None => true,
+        };
+        if self.applied_theme != self.config.theme || opacity_changed {
+            crate::theme::apply(
+                ctx,
+                crate::theme::by_id(&self.config.theme),
+                self.config.panel_opacity,
+            );
+            self.applied_theme = self.config.theme.clone();
+            self.applied_panel_opacity = Some(self.config.panel_opacity);
+        }
+
+        // Paint the animated background before any panel. If anything is
+        // actually animating we must drive repaints ourselves — the reactive
+        // scheduling below only wakes twice a second, which would render the
+        // starfield as a slideshow.
+        // Ambience is independent of the visuals: wanting rain on the speakers
+        // without a rain animation (or vice versa) is a perfectly normal thing
+        // to want, and gating one on the other just made the toggle look broken.
+        self.audio.update(
+            self.config.rain_sound,
+            self.config.rain_volume,
+            self.config.rain_sound_file.as_deref(),
+        );
+
+        let bg_fit = background::Fit::from_id(&self.config.background_fit);
+        let bg_opacity = self.config.background_opacity;
+        let bg_texture = self
+            .background
+            .sync(ctx, self.config.background_image.as_deref());
+
+        let animating = effects::render(
+            ctx,
+            &mut self.effects,
+            crate::theme::by_id(&self.config.theme),
+            effects::EffectSettings {
+                enabled: self.config.effects_enabled,
+                nebula: self.config.effect_nebula,
+                stars: self.config.effect_stars,
+                rain: self.config.effect_rain,
+                cursor_glow: self.config.effect_cursor_glow,
+                intensity: self.config.effect_intensity,
+            },
+            effects::BackgroundCfg {
+                texture: bg_texture,
+                opacity: bg_opacity,
+                fit: bg_fit,
+                dim: self.config.background_dim,
+            },
+        );
+        if self.config.overlay_enabled {
+            let due = self.overlay.render(
+                ctx,
+                self.config.overlay_opacity,
+                self.config.overlay_size,
+                overlay::Corner::from_id(&self.config.overlay_corner),
+                self.config.overlay_show_credit,
+            );
+            if let Some(d) = due {
+                ctx.request_repaint_after(d);
+            }
+        }
+
+        if animating {
+            ctx.request_repaint();
+        } else if let Some(delay) = self.background.next_frame_in() {
+            // An animated background still needs waking, but only when the
+            // next frame is actually due — a 10 fps GIF must not drag the
+            // whole UI up to 60 fps.
+            ctx.request_repaint_after(delay);
+        }
         // Schedule a repaint so background timers below tick even when the
         // user isn't interacting. Without this, eframe's reactive mode means
         // update() sleeps indefinitely and periodic work (tray-kill,
@@ -863,7 +1024,7 @@ impl eframe::App for AppState {
         ctx.request_repaint_after(std::time::Duration::from_secs(2));
         // Ensure the bridge can wake the UI when async events arrive.
         self.bridge.set_repaint_ctx(ctx.clone());
-        self.process_events();
+        self.process_events(ctx);
 
         // Top up the blurred-avatar cache for anonymize mode. No-op once
         // every visible avatar already has its blur computed; on first toggle
@@ -1619,12 +1780,31 @@ impl AppState {
     fn show_settings_tab(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
             let has_password = !self.master_password.is_empty();
+            // Computed up front: taking `&mut self.config` as an argument and
+            // then reading `self.config` for a later argument in the same call
+            // is a borrow conflict.
+            let background_broken = self
+                .background
+                .is_broken(self.config.background_image.as_deref());
+            let overlay_info = settings::OverlayInfo {
+                loading: self.overlay.loading,
+                has_image: self.overlay.has_image(),
+                credit: self.overlay.credit(),
+                error: self.overlay.last_error.clone(),
+            };
+            let background_info = settings::BackgroundInfo {
+                broken: background_broken,
+                frames: self.background.frame_count(),
+                truncated: self.background.was_truncated(),
+            };
             let action = settings::show(
                 ui,
                 &mut self.config,
                 has_password,
                 &mut self.settings_state,
                 self.roblox_running,
+                background_info,
+                overlay_info,
             );
             match action {
                 Some(settings::SettingsAction::SaveConfig) => {
@@ -1697,6 +1877,45 @@ impl AppState {
                     self.master_password.clear();
                     self.toasts.push(Toast::info("Password cleared"));
                 }
+                Some(settings::SettingsAction::PickBackgroundImage) => {
+                    // Restricted to the formats the `image` dependency is
+                    // actually compiled with — offering more would just fail
+                    // to decode later with a confusing error.
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
+                        .set_title("Choose a background image")
+                        .pick_file()
+                    {
+                        self.config.background_image = Some(path);
+                        let _ = self.config.save(&self.config_path);
+                    }
+                }
+                Some(settings::SettingsAction::FetchOverlayImage) => {
+                    self.overlay.loading = true;
+                    self.overlay.last_error = None;
+                    self.bridge.send(BackendCommand::FetchOverlayImage);
+                }
+                Some(settings::SettingsAction::ClearOverlayImage) => {
+                    self.overlay.clear();
+                }
+                Some(settings::SettingsAction::PickRainSound) => {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Audio", &["mp3", "ogg", "wav", "flac"])
+                        .set_title("Choose an ambience sound")
+                        .pick_file()
+                    {
+                        self.config.rain_sound_file = Some(path);
+                        let _ = self.config.save(&self.config_path);
+                    }
+                }
+                Some(settings::SettingsAction::ClearRainSound) => {
+                    self.config.rain_sound_file = None;
+                    let _ = self.config.save(&self.config_path);
+                }
+                Some(settings::SettingsAction::ClearBackgroundImage) => {
+                    self.config.background_image = None;
+                    let _ = self.config.save(&self.config_path);
+                }
                 Some(settings::SettingsAction::SetStorageBackend {
                     use_credential_manager,
                 }) => {
@@ -1707,6 +1926,14 @@ impl AppState {
                         // nothing to do
                     } else if use_credential_manager {
                         let pw = self.master_password.clone();
+                        if self.store.accounts.is_empty() && self.config.accounts_path.is_file() {
+                            // Nothing loaded but a store file exists: migrating
+                            // now would save an empty roster over the real one.
+                            self.toasts.push(Toast::error(
+                                "Unlock the account store before switching backends.",
+                            ));
+                            return;
+                        }
                         let (moved, failures) =
                             ram_core::crypto::migrate_to_credential_manager(&mut self.store, &pw);
                         if failures.is_empty() {

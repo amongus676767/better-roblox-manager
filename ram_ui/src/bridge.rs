@@ -138,6 +138,8 @@ pub enum BackendCommand {
         password: String,
         use_credential_manager: bool,
     },
+    /// Fetch a random SFW anime image for the corner overlay.
+    FetchOverlayImage,
     /// Decrypt the cookie and open a webview pre-logged-in as this account.
     BrowseAsAccount {
         user_id: u64,
@@ -190,6 +192,14 @@ pub enum BackendEvent {
     StoreSaved,
     /// Store loaded from disk.
     StoreLoaded(AccountStore),
+    /// A corner-overlay image was downloaded.
+    OverlayImageReady {
+        bytes: Vec<u8>,
+        artist: Option<String>,
+        source_site: String,
+    },
+    /// The corner-overlay fetch failed.
+    OverlayImageFailed(String),
     /// The store file exists but could not be decrypted with the password given.
     /// Distinct from [`BackendEvent::Error`] so the UI can fall back to the
     /// unlock prompt instead of just toasting a failure.
@@ -569,6 +579,22 @@ async fn handle_command(
             match crypto::load_encrypted(&path, &password) {
                 Ok(store) => Ok(BackendEvent::StoreLoaded(store)),
                 Err(e) => Ok(BackendEvent::StoreLoadFailed(e.to_string())),
+            }
+        }
+        BackendCommand::FetchOverlayImage => {
+            // Cheap source pick: the low bits of the clock are plenty random
+            // for choosing between two APIs.
+            let pick = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0);
+            match ram_core::neko::fetch(pick).await {
+                Ok(img) => Ok(BackendEvent::OverlayImageReady {
+                    bytes: img.bytes,
+                    artist: img.artist,
+                    source_site: img.source_site.to_string(),
+                }),
+                Err(e) => Ok(BackendEvent::OverlayImageFailed(e.to_string())),
             }
         }
         BackendCommand::KillAll => {

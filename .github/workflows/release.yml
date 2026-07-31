@@ -28,11 +28,11 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ram_ui-windows
-          path: target/release/ram_ui.exe
+          name: brm-windows
+          path: target/release/brm.exe
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/ram_ui.exe
+          files: target/release/brm.exe
           generate_release_notes: true

@@ -199,6 +199,123 @@ pub struct AppConfig {
     /// Saved private servers for quick launching.
     #[serde(default)]
     pub private_servers: Vec<PrivateServer>,
+
+    // ---- Appearance ----
+    /// Selected theme id (see `ram_ui::theme::THEMES`).
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// Master switch for all animated background effects. Off by default:
+    /// this is a utility app, and a fresh install should look like one and
+    /// stay in eframe's low-power reactive mode until asked otherwise.
+    #[serde(default)]
+    pub effects_enabled: bool,
+    /// Drifting nebula clouds.
+    #[serde(default)]
+    pub effect_nebula: bool,
+    /// Twinkling starfield.
+    #[serde(default)]
+    pub effect_stars: bool,
+    /// Falling rain streaks.
+    #[serde(default)]
+    pub effect_rain: bool,
+    /// Glow and comet trail that follow the cursor.
+    #[serde(default)]
+    pub effect_cursor_glow: bool,
+    /// 0.0..=1.0 — scales particle counts and opacity.
+    #[serde(default = "default_effect_intensity")]
+    pub effect_intensity: f32,
+
+    /// Path to a user-chosen background image. `None` = plain themed backdrop.
+    #[serde(default)]
+    pub background_image: Option<PathBuf>,
+    /// 0.0..=1.0 opacity the background image is blended at.
+    #[serde(default = "default_background_opacity")]
+    pub background_opacity: f32,
+    /// How the image maps onto the window: "cover", "contain" or "stretch".
+    #[serde(default = "default_background_fit")]
+    pub background_fit: String,
+    /// 0.0..=1.0 black scrim drawn over the backdrop. This is what keeps UI
+    /// text legible over a bright wallpaper without having to wash the
+    /// wallpaper itself out with the opacity slider.
+    #[serde(default = "default_background_dim")]
+    pub background_dim: f32,
+    /// 0.0..=1.0 opacity of the UI panels themselves. This is the control that
+    /// actually lets a wallpaper show through: the panels cover the entire
+    /// window, so their fill alpha dominates everything painted behind them.
+    #[serde(default = "default_panel_opacity")]
+    pub panel_opacity: f32,
+
+    /// Play synthesised rain ambience while the rain effect is on.
+    #[serde(default)]
+    pub rain_sound: bool,
+    /// 0.0..=1.0 rain ambience volume (applied on a perceptual curve).
+    #[serde(default = "default_rain_volume")]
+    pub rain_volume: f32,
+    /// Optional user-supplied ambience file. `None` = built-in synthesised rain.
+    #[serde(default)]
+    pub rain_sound_file: Option<PathBuf>,
+
+    // ---- Corner overlay ----
+    /// Show a fetched SFW anime image in a window corner.
+    #[serde(default)]
+    pub overlay_enabled: bool,
+    /// 0.0..=1.0 opacity of the overlay image.
+    #[serde(default = "default_overlay_opacity")]
+    pub overlay_opacity: f32,
+    /// Overlay height as a fraction of the window height.
+    #[serde(default = "default_overlay_size")]
+    pub overlay_size: f32,
+    /// Which corner: "bottom_right", "bottom_left", "top_right", "top_left".
+    #[serde(default = "default_overlay_corner")]
+    pub overlay_corner: String,
+    /// Draw the artist credit under the image.
+    #[serde(default = "default_true")]
+    pub overlay_show_credit: bool,
+    /// Fetch a fresh image automatically on startup.
+    #[serde(default = "default_true")]
+    pub overlay_fetch_on_start: bool,
+}
+
+fn default_background_opacity() -> f32 {
+    0.5
+}
+
+fn default_background_fit() -> String {
+    "cover".to_string()
+}
+
+fn default_background_dim() -> f32 {
+    0.25
+}
+
+fn default_panel_opacity() -> f32 {
+    0.85
+}
+
+fn default_rain_volume() -> f32 {
+    0.5
+}
+
+fn default_overlay_opacity() -> f32 {
+    0.9
+}
+
+fn default_overlay_size() -> f32 {
+    0.35
+}
+
+fn default_overlay_corner() -> String {
+    "bottom_right".to_string()
+}
+
+fn default_theme() -> String {
+    // Closest match to the app's original plain dark look, so a new install
+    // isn't handed someone else's taste in wallpaper.
+    "slate".to_string()
+}
+
+fn default_effect_intensity() -> f32 {
+    0.6
 }
 
 fn default_sort_mode() -> String {
@@ -235,6 +352,27 @@ impl Default for AppConfig {
             last_seen_version: None,
             sort_mode: "Custom".to_string(),
             private_servers: Vec::new(),
+            theme: default_theme(),
+            effects_enabled: false,
+            effect_nebula: false,
+            effect_stars: false,
+            effect_rain: false,
+            effect_cursor_glow: false,
+            effect_intensity: default_effect_intensity(),
+            background_image: None,
+            background_opacity: default_background_opacity(),
+            background_fit: default_background_fit(),
+            background_dim: default_background_dim(),
+            panel_opacity: default_panel_opacity(),
+            rain_sound: false,
+            rain_volume: default_rain_volume(),
+            rain_sound_file: None,
+            overlay_enabled: false,
+            overlay_opacity: default_overlay_opacity(),
+            overlay_size: default_overlay_size(),
+            overlay_corner: default_overlay_corner(),
+            overlay_show_credit: true,
+            overlay_fetch_on_start: true,
         }
     }
 }

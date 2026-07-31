@@ -1,9 +1,14 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod audio;
+mod background;
 mod bridge;
 mod browser_login;
 mod components;
+mod effects;
+mod overlay;
+mod theme;
 mod toast;
 
 use std::path::PathBuf;
@@ -190,39 +195,98 @@ fn main() {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([config.window_width, config.window_height])
             .with_min_inner_size([640.0, 400.0])
-            .with_title(format!("RM | Roblox Manager v{}", env!("CARGO_PKG_VERSION")))
+            .with_title(format!(
+                "Better Roblox Manager v{}",
+                env!("CARGO_PKG_VERSION")
+            ))
             .with_icon(icon),
         ..Default::default()
     };
 
     let _ = eframe::run_native(
-        "RM",
+        "Better Roblox Manager",
         native_options,
         Box::new(move |cc| {
             // Enable image loading for egui_extras (avatars, etc.)
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            apply_global_style(&cc.egui_ctx);
+            install_cjk_fonts(&cc.egui_ctx);
+            theme::apply(&cc.egui_ctx, theme::by_id(&config.theme), config.panel_opacity);
             Ok(Box::new(app::AppState::new(config, config_path)))
         }),
     );
 }
 
-/// Tweak egui visuals so interactive widgets (TextEdits especially) stand out
-/// from the dark section frames they sit on. Default dark-theme widgets render
-/// with no border and a background indistinguishable from `extreme_bg_color`,
-/// which made input fields invisible next to their labels.
-fn apply_global_style(ctx: &eframe::egui::Context) {
-    ctx.style_mut(|style| {
-        let v = &mut style.visuals;
-        let border = eframe::egui::Color32::from_gray(80);
-        let border_hover = eframe::egui::Color32::from_gray(140);
-        let border_active = eframe::egui::Color32::from_rgb(110, 170, 230);
-        v.widgets.inactive.bg_stroke = eframe::egui::Stroke::new(1.0, border);
-        v.widgets.hovered.bg_stroke = eframe::egui::Stroke::new(1.0, border_hover);
-        v.widgets.active.bg_stroke = eframe::egui::Stroke::new(1.0, border_active);
-        // Slight rounding on inputs/buttons to soften the new borders.
-        v.widgets.inactive.rounding = eframe::egui::Rounding::same(3.0);
-        v.widgets.hovered.rounding = eframe::egui::Rounding::same(3.0);
-        v.widgets.active.rounding = eframe::egui::Rounding::same(3.0);
-    });
+/// Register system CJK fonts as fallbacks.
+///
+/// egui's bundled fonts cover Latin, Greek and Cyrillic only, so Japanese,
+/// Chinese and Korean text renders as tofu boxes. That shows up in artist
+/// credits from the image APIs and in Roblox display names, both of which are
+/// frequently CJK.
+///
+/// Rather than bundling a font (Noto CJK is tens of megabytes per weight) we
+/// borrow what Windows already ships. Fonts are appended *after* the defaults
+/// so they act purely as fallbacks: egui walks the family in order and uses
+/// the first font containing each glyph, leaving Latin text untouched.
+///
+/// Each script takes the first candidate that exists, so we hold one font per
+/// script rather than all of them. Missing fonts are skipped silently — a
+/// system without Korean support simply keeps showing boxes for Hangul, which
+/// is no worse than the current behaviour.
+fn install_cjk_fonts(ctx: &eframe::egui::Context) {
+    use eframe::egui::{FontData, FontDefinitions, FontFamily};
+
+    // Per script: candidates in preference order. `.ttc` files are font
+    // *collections*, hence the face index — `FontData::from_owned` defaults it
+    // to 0, which is the right face for all of these.
+    const GROUPS: &[(&str, &[(&str, u32)])] = &[
+        // Japanese first: kana plus the Japanese variants of shared Han glyphs.
+        ("cjk_jp", &[("meiryo.ttc", 0), ("YuGothR.ttc", 0), ("msgothic.ttc", 0)]),
+        ("cjk_sc", &[("msyh.ttc", 0), ("simsun.ttc", 0)]),
+        ("cjk_tc", &[("msjh.ttc", 0), ("mingliu.ttc", 0)]),
+        ("cjk_kr", &[("malgun.ttf", 0), ("gulim.ttc", 0)]),
+    ];
+
+    let fonts_dir = std::path::PathBuf::from(
+        std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string()),
+    )
+    .join("Fonts");
+
+    let mut fonts = FontDefinitions::default();
+    let mut loaded: Vec<String> = Vec::new();
+
+    for (key, candidates) in GROUPS {
+        for (file, index) in *candidates {
+            let path = fonts_dir.join(file);
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            // `.into()` rather than a bare `FontData`: this epaint version
+            // stores font data as `Arc<FontData>` so it can be shared cheaply.
+            fonts.font_data.insert(
+                (*key).to_string(),
+                FontData {
+                    font: std::borrow::Cow::Owned(bytes),
+                    index: *index,
+                    tweak: Default::default(),
+                }
+                .into(),
+            );
+            loaded.push((*key).to_string());
+            break; // one font per script is enough
+        }
+    }
+
+    if loaded.is_empty() {
+        tracing::warn!("No system CJK fonts found; non-Latin text will render as boxes");
+        return;
+    }
+
+    for key in &loaded {
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            fonts.families.entry(family).or_default().push(key.clone());
+        }
+    }
+
+    tracing::info!("Loaded CJK fallback fonts: {}", loaded.join(", "));
+    ctx.set_fonts(fonts);
 }

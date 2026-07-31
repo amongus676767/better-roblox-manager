@@ -7,6 +7,12 @@ license = "MIT"
 repository = "https://gitlab.com/centerepic/robloxmanager"
 authors = ["RM Contributors"]
 
+# The crate stays `ram_ui` (ram_core depends on the name and the workspace is
+# laid out around it) but the shipped binary is `brm.exe`.
+[[bin]]
+name = "brm"
+path = "src/main.rs"
+
 [dependencies]
 ram_core = { path = "../ram_core" }
 tokio = { workspace = true }
@@ -19,8 +25,12 @@ chrono = "0.4"
 
 eframe = "0.30"
 egui_extras = { version = "0.30", features = ["image", "http"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 rfd = "0.15"
+
+# Decoders are enabled so users can supply their own ambience file; the
+# built-in rain is still synthesised and needs none of them.
+rodio = { version = "0.20", features = ["mp3", "vorbis", "wav", "flac"] }
 
 # Embedded WebView2-backed login window (Windows-only path; wry pulls webkit
 # on non-Windows targets but this project ships Windows-only).

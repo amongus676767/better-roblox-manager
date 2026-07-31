@@ -27,8 +27,8 @@ build:
     - rustup default stable
     - cargo build --release
     - |
-      $url = "$env:CI_API_V4_URL/projects/$env:CI_PROJECT_ID/packages/generic/ram_ui/$env:CI_COMMIT_TAG/ram_ui.exe"
-      curl.exe --fail --header "JOB-TOKEN: $env:CI_JOB_TOKEN" --upload-file target/release/ram_ui.exe $url
+      $url = "$env:CI_API_V4_URL/projects/$env:CI_PROJECT_ID/packages/generic/brm/$env:CI_COMMIT_TAG/brm.exe"
+      curl.exe --fail --header "JOB-TOKEN: $env:CI_JOB_TOKEN" --upload-file target/release/brm.exe $url
 
 release:
   stage: release
@@ -44,5 +44,5 @@ release:
     description: "See [CHANGELOG.md]($CI_PROJECT_URL/-/blob/main/CHANGELOG.md) for details."
     assets:
       links:
-        - name: ram_ui.exe
-          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/ram_ui/$CI_COMMIT_TAG/ram_ui.exe"
+        - name: brm.exe
+          url: "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/brm/$CI_COMMIT_TAG/brm.exe"

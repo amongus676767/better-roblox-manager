@@ -3,6 +3,7 @@ pub mod auth;
 pub mod crypto;
 pub mod error;
 pub mod models;
+pub mod neko;
 pub mod presets;
 pub mod process;
 pub mod storage;

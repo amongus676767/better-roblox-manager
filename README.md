@@ -36,7 +36,7 @@ cargo build --release
 cargo run --release
 ```
 
-The compiled binary will be at `target/release/ram_ui.exe`.
+The compiled binary will be at `target/release/brm.exe`.
 
 ### Development
 
