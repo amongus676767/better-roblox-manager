@@ -85,7 +85,6 @@ struct Frame {
 #[derive(Default)]
 pub struct Animation {
     frames: Vec<Frame>,
-    truncated: bool,
     cursor: usize,
     accum: f32,
 }
@@ -94,10 +93,12 @@ impl Animation {
     /// Decode from raw encoded bytes. `name` disambiguates the uploaded
     /// textures so the wallpaper and overlay don't collide in egui's cache.
     pub fn from_bytes(ctx: &egui::Context, bytes: &[u8], name: &str) -> Result<Self, String> {
-        let (frames, truncated) = decode_bytes(ctx, bytes, name)?;
+        // Truncation is already logged by `collect_frames`; callers that need
+        // to surface it in the UI (the wallpaper) track it themselves, so it
+        // isn't carried on the animation.
+        let (frames, _truncated) = decode_bytes(ctx, bytes, name)?;
         Ok(Self {
             frames,
-            truncated,
             cursor: 0,
             accum: 0.0,
         })
@@ -131,14 +132,6 @@ impl Animation {
         }
         let remaining = (self.frames[self.cursor].delay - self.accum).max(0.0);
         Some(Duration::from_secs_f32(remaining))
-    }
-
-    pub fn frame_count(&self) -> usize {
-        self.frames.len()
-    }
-
-    pub fn was_truncated(&self) -> bool {
-        self.truncated
     }
 }
 
